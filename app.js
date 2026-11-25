@@ -1898,3 +1898,1045 @@
         const line = pickIdleLine(now);
         if (line) TTS.speak(line);
       }
+    } else if (state.phase === 'summary') {
+      state.summaryRemainingMs -= dt;
+      if (dom.summaryTimerFill) {
+        const pct = clamp((state.summaryRemainingMs / SUMMARY_DURATION_MS) * 100, 0, 100);
+        dom.summaryTimerFill.style.width = `${pct}%`;
+      }
+      if (state.summaryRemainingMs <= 0) {
+        startCountdown();
+      }
+    } else if (state.phase === 'countdown') {
+      state.countdownRemaining -= dt / 1000;
+      const shown = Math.max(1, Math.ceil(state.countdownRemaining));
+      if (dom.countdownNumber && dom.countdownNumber.textContent !== String(shown)) {
+        dom.countdownNumber.textContent = String(shown);
+      }
+      if (state.countdownRemaining <= 0) {
+        startNewSession(false);
+      }
+    }
+  }
+
+  /* =========================================================================
+   * 14. POND CANVAS 2D RENDERER (1000x480, HAND-DRAWN ART + FISHERMAN)
+   * ========================================================================= */
+
+  let pondCtx = null;
+  let rafId = null;
+
+  function drawSkyAndBank(ctx, w, t) {
+    // Sky gradient (warm peaceful late-afternoon pond sky)
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, 248);
+    skyGrad.addColorStop(0, '#0c3f52');
+    skyGrad.addColorStop(0.58, '#1d6978');
+    skyGrad.addColorStop(1, '#5fa39b');
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, w, 255);
+
+    // Warm sun + soft glow
+    const sunX = 875;
+    const sunY = 92;
+    const sunGlow = ctx.createRadialGradient(sunX, sunY, 16, sunX, sunY, 138);
+    sunGlow.addColorStop(0, 'rgba(255, 224, 102, 0.94)');
+    sunGlow.addColorStop(0.45, 'rgba(255, 210, 63, 0.36)');
+    sunGlow.addColorStop(1, 'rgba(255, 210, 63, 0)');
+    ctx.fillStyle = sunGlow;
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 138, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffe57f';
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 40, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Soft drifting clouds
+    ctx.fillStyle = 'rgba(224, 242, 254, 0.22)';
+    for (let i = 0; i < 3; i++) {
+      const cx = ((i * 360 + t * (8 + i * 2)) % (w + 220)) - 110;
+      const cy = 54 + (i % 2) * 38;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 32, 0, Math.PI * 2);
+      ctx.arc(cx + 32, cy - 9, 38, 0, Math.PI * 2);
+      ctx.arc(cx + 68, cy, 28, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Distant rolling hills
+    ctx.fillStyle = '#0f4c45';
+    ctx.beginPath();
+    ctx.moveTo(0, 236);
+    ctx.quadraticCurveTo(190, 144, 400, 218);
+    ctx.quadraticCurveTo(640, 148, 860, 212);
+    ctx.quadraticCurveTo(965, 174, w, 204);
+    ctx.lineTo(w, 260);
+    ctx.lineTo(0, 260);
+    ctx.closePath();
+    ctx.fill();
+
+    // Trees & bamboo silhouettes on bank
+    const treePositions = [44, 104, 268, 342, 692, 766, 945, 1002];
+    treePositions.forEach((tx, idx) => {
+      const sway = Math.sin(t * 1.4 + idx) * 3.5;
+      const h = 58 + (idx % 3) * 18;
+      ctx.fillStyle = '#3b2f2f';
+      ctx.fillRect(tx - 4, 228 - h * 0.45, 8, h * 0.55);
+
+      ctx.fillStyle = idx % 2 === 0 ? '#155e49' : '#1b7256';
+      ctx.beginPath();
+      ctx.arc(tx + sway, 210 - h * 0.4, 30 + (idx % 2) * 9, 0, Math.PI * 2);
+      ctx.arc(tx - 18 + sway, 222 - h * 0.28, 22, 0, Math.PI * 2);
+      ctx.arc(tx + 20 + sway, 222 - h * 0.28, 22, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    // Lush grassy pond bank
+    const bankGrad = ctx.createLinearGradient(0, 216, 0, 314);
+    bankGrad.addColorStop(0, '#2a8f5c');
+    bankGrad.addColorStop(0.65, '#1b6b45');
+    bankGrad.addColorStop(1, '#3f5236');
+    ctx.fillStyle = bankGrad;
+    ctx.beginPath();
+    ctx.moveTo(0, 232);
+    ctx.quadraticCurveTo(270, 214, 540, 236);
+    ctx.quadraticCurveTo(820, 248, w, 224);
+    ctx.lineTo(w, 314);
+    ctx.lineTo(0, 314);
+    ctx.closePath();
+    ctx.fill();
+
+    // Shoreline earth lip
+    ctx.fillStyle = '#5c4632';
+    ctx.fillRect(0, 298, w, 16);
+
+    // 10 subtle bank rod-rest pegs
+    ctx.strokeStyle = 'rgba(255, 224, 150, 0.4)';
+    ctx.lineWidth = 2.6;
+    ROD_SLOTS.forEach((s) => {
+      ctx.beginPath();
+      ctx.moveTo(s.bankX, s.bankY + 4);
+      ctx.lineTo(s.bankX, s.bankY - 12);
+      ctx.stroke();
+    });
+  }
+
+  /**
+   * Animated 2D Vietnamese cartoon fisherman sitting on the grassy bank
+   * (center-left at fixed spot x=156, y=242, scaled 1.55x so he is crisp on phones
+   * while never blocking the 10 rods/bobbers).
+   */
+  function drawFisherman(ctx, t) {
+    const mood = state.fishermanMood;
+    const baseX = 156;
+    const baseY = 242;
+
+    let offsetY = Math.sin(t * 2.2) * 2.2;
+    let leanAngle = 0;
+    let rodLift = 0;
+
+    if (mood === 'reeling') {
+      leanAngle = 0.14 + Math.sin(t * 14) * 0.05;
+      rodLift = -14 + Math.sin(t * 16) * 5;
+      offsetY = -3;
+    } else if (mood === 'excited') {
+      offsetY = -Math.abs(Math.sin(t * 10)) * 22;
+      leanAngle = Math.sin(t * 10) * 0.08;
+      rodLift = -22;
+    } else if (mood === 'disappointed') {
+      leanAngle = 0.22;
+      offsetY = 6;
+      rodLift = 12;
+    }
+
+    ctx.save();
+    ctx.translate(baseX, baseY + offsetY);
+    ctx.scale(1.55, 1.55);
+
+    // Small wooden stool / mat on the bank
+    ctx.fillStyle = '#7c4a28';
+    ctx.fillRect(-16, 14, 32, 7);
+    ctx.fillStyle = '#5a341a';
+    ctx.fillRect(-13, 21, 5, 8);
+    ctx.fillRect(8, 21, 5, 8);
+
+    // Seated legs (dark brown rural trousers)
+    ctx.strokeStyle = '#2b241f';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(4, 12);
+    ctx.lineTo(18, 17);
+    ctx.lineTo(22, 28);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.rotate(leanAngle);
+
+    // Torso (áo bà ba — traditional sky-teal shirt)
+    ctx.fillStyle = '#3b8299';
+    ctx.beginPath();
+    ctx.roundRect(-12, -16, 24, 30, 8);
+    ctx.fill();
+    ctx.strokeStyle = '#1e4e5f';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Head
+    ctx.fillStyle = '#f6c89f';
+    ctx.beginPath();
+    ctx.arc(0, -25, 11, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes / expression
+    ctx.fillStyle = '#1f2937';
+    if (mood === 'excited') {
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(4, -26, 2.5, Math.PI, 0);
+      ctx.stroke();
+      ctx.fillStyle = '#be123c';
+      ctx.beginPath();
+      ctx.arc(5, -20, 3, 0, Math.PI);
+      ctx.fill();
+    } else if (mood === 'disappointed') {
+      ctx.fillRect(2, -26, 4, 1.5);
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(4, -19, 3, Math.PI * 1.15, Math.PI * 1.85);
+      ctx.stroke();
+      ctx.fillStyle = '#7dd3fc';
+      ctx.beginPath();
+      ctx.arc(-7, -28, 2.8, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.beginPath();
+      ctx.arc(4, -26, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#7c2d12';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(4, -22, 2.5, 0.1 * Math.PI, 0.85 * Math.PI);
+      ctx.stroke();
+    }
+
+    // Iconic Vietnamese Nón Lá (conical hat)
+    ctx.fillStyle = '#e9c46a';
+    ctx.strokeStyle = '#b08938';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(-22, -29);
+    ctx.lineTo(0, -49);
+    ctx.lineTo(22, -29);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Hat weave lines
+    ctx.strokeStyle = 'rgba(139, 94, 32, 0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-14, -35);
+    ctx.lineTo(14, -35);
+    ctx.moveTo(-8, -41);
+    ctx.lineTo(8, -41);
+    ctx.stroke();
+
+    // Arms + fisherman's decorative bamboo rod
+    ctx.strokeStyle = '#3b8299';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    if (mood === 'excited') {
+      ctx.beginPath();
+      ctx.moveTo(-6, -10);
+      ctx.lineTo(-18, -28);
+      ctx.moveTo(6, -10);
+      ctx.lineTo(20, -28);
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffd23f';
+      for (let s = 0; s < 3; s++) {
+        const sx = -24 + s * 24;
+        const sy = -54 - (s % 2) * 8 + Math.sin(t * 12 + s) * 3;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(4, -8);
+      ctx.lineTo(18, -4 + rodLift * 0.25);
+      ctx.stroke();
+    }
+
+    // Fisherman's bamboo pole
+    ctx.strokeStyle = '#d4a359';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(14, -2 + rodLift * 0.2);
+    ctx.quadraticCurveTo(44, -22 + rodLift, 66, -10 + rodLift);
+    ctx.stroke();
+
+    // Thin fishing line to water edge
+    ctx.strokeStyle = 'rgba(224, 242, 254, 0.48)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(66, -10 + rodLift);
+    ctx.lineTo(70, 56);
+    ctx.stroke();
+
+    if (mood === 'reeling') {
+      ctx.strokeStyle = 'rgba(255, 210, 63, 0.88)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(28, -20, 12, -1.1, 0.4);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+    ctx.restore();
+  }
+
+  // Draw a DETAILED fish of a given species (facing +x, centered at 0,0).
+  // Body = ellipse with vertical gradient (body -> belly), tail + dorsal +
+  // pectoral fins, eye, gill line, scale hints; specials per species:
+  // whiskers (cá trê), spots (cá lóc), spiny dorsal (cá rô), tall dorsal (cá mập).
+  // `size` = half-length of the body; `wag` = tail sway in px.
+  function drawDetailedFish(ctx, size, species, wag) {
+    const s = species || FISH_SPECIES[0];
+    const bodyGrad = ctx.createLinearGradient(0, -size * 0.38, 0, size * 0.38);
+    bodyGrad.addColorStop(0, s.body);
+    bodyGrad.addColorStop(1, s.belly);
+    // Tail fin (forked, sways with wag)
+    ctx.fillStyle = s.fin;
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.8, 0);
+    ctx.lineTo(-size * 1.4, -size * 0.42 + wag);
+    ctx.lineTo(-size * 1.15, 0);
+    ctx.lineTo(-size * 1.4, size * 0.42 + wag);
+    ctx.closePath();
+    ctx.fill();
+    // Body
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, size, size * 0.38, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Dorsal fin (spiny zigzag for cá rô, tall for cá mập, plain otherwise)
+    ctx.fillStyle = s.fin;
+    ctx.beginPath();
+    if (s.mark === 'spiny') {
+      ctx.moveTo(-size * 0.35, -size * 0.3);
+      ctx.lineTo(-size * 0.2, -size * 0.62);
+      ctx.lineTo(-size * 0.05, -size * 0.34);
+      ctx.lineTo(size * 0.1, -size * 0.6);
+      ctx.lineTo(size * 0.25, -size * 0.32);
+      ctx.closePath();
+    } else if (s.mark === 'dorsal') {
+      ctx.moveTo(-size * 0.15, -size * 0.3);
+      ctx.lineTo(size * 0.05, -size * 0.85);
+      ctx.lineTo(size * 0.3, -size * 0.3);
+      ctx.closePath();
+    } else {
+      ctx.moveTo(-size * 0.3, -size * 0.3);
+      ctx.lineTo(0, -size * 0.62);
+      ctx.lineTo(size * 0.3, -size * 0.3);
+      ctx.closePath();
+    }
+    ctx.fill();
+    // Pectoral fin
+    ctx.beginPath();
+    ctx.ellipse(-size * 0.1, size * 0.28, size * 0.22, size * 0.1, 0.5, 0, Math.PI * 2);
+    ctx.fill();
+    // Gill line
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = Math.max(1.5, size * 0.05);
+    ctx.beginPath();
+    ctx.arc(size * 0.42, 0, size * 0.22, -1.1, 1.1);
+    ctx.stroke();
+    // Scale hints (3 arcs on the flank)
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1.5;
+    for (let k = 0; k < 3; k++) {
+      ctx.beginPath();
+      ctx.arc(-size * 0.25 + k * size * 0.3, size * 0.05, size * 0.14, 0.3, Math.PI - 0.3);
+      ctx.stroke();
+    }
+    // Species specials
+    if (s.mark === 'whiskers') {
+      ctx.strokeStyle = 'rgba(20,30,35,0.8)';
+      ctx.lineWidth = Math.max(1.5, size * 0.05);
+      ctx.beginPath();
+      ctx.moveTo(size * 0.9, size * 0.08);
+      ctx.quadraticCurveTo(size * 1.25, size * 0.22, size * 1.45, size * 0.45);
+      ctx.moveTo(size * 0.9, -size * 0.05);
+      ctx.quadraticCurveTo(size * 1.25, -size * 0.18, size * 1.45, -size * 0.38);
+      ctx.stroke();
+    }
+    if (s.mark === 'spots') {
+      ctx.fillStyle = 'rgba(20,30,15,0.45)';
+      for (let k = 0; k < 4; k++) {
+        ctx.beginPath();
+        ctx.arc(-size * 0.45 + k * size * 0.3, -size * 0.08 + (k % 2) * size * 0.14, size * 0.07, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // Eye
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(size * 0.62, -size * 0.08, size * 0.09, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#10181c';
+    ctx.beginPath();
+    ctx.arc(size * 0.64, -size * 0.08, size * 0.045, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawWaterAndShadows(ctx, w, h, t) {
+    const waterTop = 310;
+    const waterGrad = ctx.createLinearGradient(0, waterTop, 0, h);
+    waterGrad.addColorStop(0, '#0f6d77');
+    waterGrad.addColorStop(0.42, '#094756');
+    waterGrad.addColorStop(1, '#042029');
+    ctx.fillStyle = waterGrad;
+    ctx.fillRect(0, waterTop, w, h - waterTop);
+
+    // Sun reflection shimmer on water
+    ctx.fillStyle = 'rgba(255, 224, 120, 0.09)';
+    for (let r = 0; r < 10; r++) {
+      const rw = 82 - r * 6 + Math.sin(t * 2 + r) * 8;
+      ctx.fillRect(875 - rw / 2, 330 + r * 38, rw, 8);
+    }
+
+    // Detailed fish (one per species) swimming underwater — slightly
+    // translucent so they read as under water, but clearly colored fish.
+    fishShadows.forEach((f) => {
+      if (!state.paused) {
+        f.x += f.speed;
+        if (f.x > w + 70) f.x = -70;
+        if (f.x < -70) f.x = w + 70;
+      }
+      const wag = Math.sin(t * 4.5 + f.phase) * 4.5;
+      const dir = f.speed >= 0 ? 1 : -1;
+      ctx.save();
+      ctx.translate(f.x, f.y + Math.sin(t * 1.2 + f.phase) * 6);
+      ctx.scale(dir, 1);
+      ctx.globalAlpha = 0.85;
+      drawDetailedFish(ctx, f.size, f.species, wag);
+      ctx.restore();
+    });
+
+    // Caught fish flash: the just-caught fish shown big above the water
+    // at its bobber for ~2.5s (set in jerkRod, cleared in tick).
+    if (state.caughtFlash) {
+      const flash = state.caughtFlash;
+      const sp = FISH_SPECIES.find((s) => s.id === flash.speciesId) || FISH_SPECIES[0];
+      // Keep the whole fish inside the pond: it spans ~134px left (tail)
+      // to ~96px right (head) of its center, so clamp the center x —
+      // at an edge bobber (slot 0, bobberX=82) the tail stuck out of the pond.
+      const flashX = Math.max(140, Math.min(950, flash.x));
+      ctx.save();
+      ctx.translate(flashX, flash.y - 46);
+      ctx.rotate(-0.25);
+      ctx.globalAlpha = 0.95;
+      drawDetailedFish(ctx, 96, sp, Math.sin(t * 6) * 8);
+      ctx.restore();
+    }
+
+    // Animated sine-wave ripples moving with time
+    ctx.lineWidth = 2;
+    for (let row = 0; row < 12; row++) {
+      const yBase = 338 + row * 48;
+      ctx.strokeStyle = row % 2 === 0 ? 'rgba(125, 211, 252, 0.14)' : 'rgba(255, 255, 255, 0.08)';
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += 22) {
+        const y = yBase + Math.sin(x * 0.022 + t * (1.6 + row * 0.1) + row) * 4.5;
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Nhân vật ngồi câu thu nhỏ cho từng người chơi (1 nhân vật / 1 cần).
+  // Ngồi trên bờ ngay chân cần, đội nón lá, áo màu riêng theo slot;
+  // nghiêng người khi cá cắn câu.
+  function drawMiniFisherman(ctx, x, y, t, biting, shirtColor) {
+    ctx.save();
+    ctx.translate(x, y - 6 + (biting ? Math.sin(t * 14) * 2 : Math.sin(t * 2) * 1.5));
+    if (biting) ctx.rotate(-0.12);
+    // Chân ngồi
+    ctx.fillStyle = '#5a341a';
+    ctx.beginPath();
+    ctx.roundRect(-13, 2, 26, 7, 3);
+    ctx.fill();
+    // Thân (áo màu riêng)
+    ctx.fillStyle = shirtColor || '#38bdf8';
+    ctx.beginPath();
+    ctx.roundRect(-9, -14, 18, 17, 6);
+    ctx.fill();
+    // Đầu
+    ctx.fillStyle = '#f6c89f';
+    ctx.beginPath();
+    ctx.arc(0, -18, 7, 0, Math.PI * 2);
+    ctx.fill();
+    // Nón lá
+    ctx.fillStyle = '#e8c268';
+    ctx.beginPath();
+    ctx.moveTo(-13, -21);
+    ctx.quadraticCurveTo(0, -36, 13, -21);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#b98a2f';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawActiveRods(ctx, t) {
+    if (state.rods.length === 0) {
+      // Friendly empty-pond prompt (centered & crisp for mobile)
+      ctx.save();
+      ctx.fillStyle = 'rgba(5, 28, 37, 0.78)';
+      ctx.strokeStyle = 'rgba(125, 211, 252, 0.48)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.roundRect(130, 540, 780, 84, 20);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#e0f2fe';
+      ctx.font = 'bold 28px "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🎣 Thả tim hoặc bình luận "câu" để quăng cần!', 520, 582);
+      ctx.restore();
+      return;
+    }
+
+    state.rods.forEach((rod) => {
+      const slot = ROD_SLOTS[rod.slot] || ROD_SLOTS[0];
+      const biting = rod.status === 'biting';
+
+      // Nhân vật ngồi câu riêng cho từng người chơi (tên đã có ở pill dưới phao).
+      drawMiniFisherman(ctx, slot.bankX, slot.bankY, t, biting, MINI_SHIRTS[rod.slot % MINI_SHIRTS.length]);
+
+      // Rod tip slightly ahead and above bank slot
+      const tipX = slot.bankX + (slot.bobberX >= 520 ? -16 : 16);
+      const tipY = slot.bankY - 96 + (biting ? Math.sin(t * 28) * 7 + 12 : Math.sin(t * 2 + rod.slot) * 2);
+
+      const bobX = slot.bobberX + (biting ? Math.sin(t * 36 + rod.slot) * 6 : Math.sin(t * 1.8 + rod.slot) * 2);
+      const bobY = slot.bobberY + (biting ? 9 + Math.sin(t * 24) * 4 : Math.sin(t * 3.2 + rod.slot) * 4);
+
+      // Diagonal fishing rod
+      ctx.save();
+      ctx.strokeStyle = rod.boost === 'gold' ? '#ffd23f' : rod.boost === 'bait' ? '#34d399' : '#d6a461';
+      ctx.lineWidth = rod.boost === 'gold' ? 5.5 : 4.2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(slot.bankX, slot.bankY + 4);
+      ctx.quadraticCurveTo((slot.bankX + tipX) / 2, tipY + 18, tipX, tipY);
+      ctx.stroke();
+
+      // Fishing line down to bobber
+      ctx.strokeStyle = 'rgba(240, 249, 255, 0.78)';
+      ctx.lineWidth = 1.7;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(bobX, bobY - 6);
+      ctx.stroke();
+
+      // Water ripple rings around bobber
+      if (biting) {
+        const ringR = 20 + ((t * 60) % 38);
+        ctx.strokeStyle = 'rgba(255, 210, 63, 0.9)';
+        ctx.lineWidth = 3.2;
+        ctx.beginPath();
+        ctx.ellipse(bobX, bobY + 6, ringR, ringR * 0.42, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const ringR2 = 11 + (((t * 60) + 19) % 38);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.72)';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.ellipse(bobX, bobY + 6, ringR2, ringR2 * 0.42, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = 'rgba(125, 211, 252, 0.4)';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.ellipse(bobX, bobY + 7, 16 + Math.sin(t * 3 + rod.slot) * 3, 6.5, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // Bobber (red top, white bottom; sinks halfway when biting)
+      const sinkClip = biting ? 4 : 0;
+      ctx.fillStyle = '#ef4444';
+      ctx.beginPath();
+      ctx.arc(bobX, bobY - 3 + sinkClip, 9.5, Math.PI, 0);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(bobX, bobY - 3 + sinkClip, 9.5, 0, Math.PI);
+      ctx.fill();
+
+      // Exclamation mark when biting
+      if (biting) {
+        ctx.fillStyle = '#ffd23f';
+        ctx.font = '900 30px "Segoe UI", system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('!', bobX, bobY - 24);
+      }
+
+      // Boost badge on rod
+      if (rod.boost) {
+        const isGold = rod.boost === 'gold';
+        const label = isGold ? '★ CẦN VÀNG' : '● MỒI NGON';
+        ctx.font = '800 13px "Segoe UI", system-ui, sans-serif';
+        const tw = ctx.measureText(label).width + 16;
+        ctx.fillStyle = isGold ? 'rgba(255, 210, 63, 0.94)' : 'rgba(52, 211, 153, 0.94)';
+        ctx.beginPath();
+        ctx.roundRect(bobX - tw / 2, bobY - 56, tw, 24, 7);
+        ctx.fill();
+        ctx.fillStyle = '#05202a';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, bobX, bobY - 44);
+      }
+
+      // Fisher name + status pill under bobber (phone-readable size)
+      const shortName = rod.username.length > 11 ? rod.username.slice(0, 10) + '…' : rod.username;
+      const statusText = biting ? 'CẮN CÂU!' : 'chờ cá…';
+
+      ctx.fillStyle = biting ? 'rgba(185, 28, 28, 0.94)' : 'rgba(6, 26, 36, 0.88)';
+      ctx.strokeStyle = biting ? '#ffd23f' : 'rgba(125, 211, 252, 0.42)';
+      ctx.lineWidth = biting ? 2.2 : 1.3;
+      ctx.beginPath();
+      ctx.roundRect(bobX - 56, bobY + 18, 112, 46, 10);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '700 15px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText(shortName, bobX, bobY + 32);
+
+      ctx.fillStyle = biting ? '#fde047' : '#7dd3fc';
+      ctx.font = biting ? '900 14px "Segoe UI", system-ui, sans-serif' : '600 13px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText(statusText, bobX, bobY + 51);
+
+      ctx.restore();
+    });
+  }
+
+  function renderPondFrame(ts) {
+    if (pondCtx && dom.pondCanvas) {
+      const t = (ts || Date.now()) / 1000;
+      const w = dom.pondCanvas.width;
+      const h = dom.pondCanvas.height;
+      pondCtx.clearRect(0, 0, w, h);
+      drawSkyAndBank(pondCtx, w, t);
+      drawWaterAndShadows(pondCtx, w, h, t);
+      // Có người chơi thì mỗi người có nhân vật ngồi câu riêng;
+      // chỉ vẽ ngư dân lớn khi hồ đang trống.
+      if (state.rods.length === 0) drawFisherman(pondCtx, t);
+      drawActiveRods(pondCtx, t);
+    }
+    Confetti.updateAndDraw();
+  }
+
+  function startRenderLoop() {
+    if (typeof window.requestAnimationFrame !== 'function') return;
+    function frame(ts) {
+      renderPondFrame(ts);
+      rafId = window.requestAnimationFrame(frame);
+    }
+    if (!rafId) {
+      rafId = window.requestAnimationFrame(frame);
+    }
+  }
+
+  /* =========================================================================
+   * 15. ABLY CLIENT (LIVE MODE — trang GitHub Pages)
+   * =========================================================================
+   * Thay client WebSocket nội bộ bằng Ably subscribe qua
+   * @ably/pubsub-device 3.2.0 (global AblyPubSub). SDK cổ điển `ably` v2
+   * bị tài khoản MAU pricing từ chối (lỗi 40168).
+   * Chỉ đổi đường nhận event — mọi logic game giữ nguyên.
+   * ========================================================================= */
+
+  function getAblyConfig() {
+    // ably-config.js (key SUBSCRIBE-ONLY) dùng 2 biến toàn cục;
+    // đồng thời hỗ trợ dạng window.ABLY_CONFIG {key, channel} và param URL.
+    const params = new URLSearchParams(window.location ? window.location.search : '');
+    const fromFile = window.ABLY_CONFIG || {};
+    return {
+      key: params.get('ablyKey') || fromFile.key || window.ABLY_SUBSCRIBE_KEY || '',
+      channel: params.get('ablyChannel') || fromFile.channel || window.ABLY_CHANNEL || 'cau-ca-live'
+    };
+  }
+
+  function parseAblyData(raw) {
+    if (raw && typeof raw === 'object') return raw;
+    if (typeof raw === 'string') {
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    return null;
+  }
+
+  // Chống trùng khi Ably replay sau reconnect (mỗi message có id duy nhất).
+  function seenAblyMsg(msg) {
+    if (!msg || !msg.id) return false;
+    if (state.seenMsgIds.has(msg.id)) return true;
+    state.seenMsgIds.add(msg.id);
+    if (state.seenMsgIds.size > 500) {
+      const first = state.seenMsgIds.values().next().value;
+      state.seenMsgIds.delete(first);
+    }
+    return false;
+  }
+
+  // Lọc event cũ hơn lúc tải trang − 10s (Ably có thể replay ~2 phút khi resume).
+  function isStaleAblyMsg(msg, data) {
+    const ts = Number((data && data.timestamp) || (msg && msg.timestamp) || 0);
+    return Boolean(ts) && ts < state.pageLoadTs - 10000;
+  }
+
+  function onAblyComment(msg) {
+    if (seenAblyMsg(msg)) return;
+    const data = parseAblyData(msg.data);
+    if (!data || typeof data.text !== 'string') return;
+    if (isStaleAblyMsg(msg, data)) return;
+    handleComment(data.user || data.username || 'Khán giả', data.text);
+  }
+
+  function onAblyLike(msg) {
+    if (seenAblyMsg(msg)) return;
+    const data = parseAblyData(msg.data);
+    if (!data) return;
+    if (isStaleAblyMsg(msg, data)) return;
+    handleLike(data.user || data.username || 'Khán giả', { likeCount: data.likeCount || 1 });
+  }
+
+  function onAblyGift(msg) {
+    if (seenAblyMsg(msg)) return;
+    const data = parseAblyData(msg.data);
+    if (!data || typeof data.giftName !== 'string') return;
+    if (isStaleAblyMsg(msg, data)) return;
+    handleGift(data);
+  }
+
+  // BẢN BÁN HÀNG: SP đang ghim (server publish từ message OEC).
+  function onAblyProduct(msg) {
+    if (seenAblyMsg(msg)) return;
+    const data = parseAblyData(msg.data);
+    if (!data) return;
+    if (isStaleAblyMsg(msg, data)) return;
+    handleProductEvent(data);
+  }
+
+  function onAblyStatus(msg) {
+    const data = parseAblyData(msg.data);
+    if (!data) return;
+    // BẢN BÁN HÀNG: status heartbeat (10s) kèm SP hiện tại để banner
+    // đồng bộ lại dù event 'product' trước đó bị lỡ.
+    if (data.product) handleProductEvent(data.product);
+    if (state.mode !== 'live') return;
+    if (data.connected) {
+      updateModeBadge(`LIVE @${data.username || state.liveUser}`, true);
+    } else if (data.message && String(data.message).indexOf('Đang kết nối') !== -1) {
+      updateModeBadge(`ĐANG KẾT NỐI @${data.username || state.liveUser}`, true);
+    } else if (state.ablyConnected) {
+      // Ably vẫn nối tốt, chỉ là chưa có live TikTok gắn vào — không phải
+      // "mất kết nối" (event vẫn chảy bình thường).
+      updateModeBadge(`CHỜ LIVE @${state.liveUser}`, false);
+    } else {
+      updateModeBadge(`MẤT KẾT NỐI @${state.liveUser}`, true);
+    }
+  }
+
+  // API test: nhận 1 message Ably đã parse {name, data, id, timestamp}.
+  function handleAblyMessage(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    if (msg.name === 'comment') { onAblyComment(msg); return true; }
+    if (msg.name === 'like') { onAblyLike(msg); return true; }
+    if (msg.name === 'gift') { onAblyGift(msg); return true; }
+    if (msg.name === 'product') { onAblyProduct(msg); return true; }
+    if (msg.name === 'status') { onAblyStatus(msg); return true; }
+    return false;
+  }
+
+  function connectAbly() {
+    if (state.mode !== 'live' || !state.liveUser) return;
+    if (typeof AblyPubSub === 'undefined' || typeof AblyPubSub.createClient !== 'function') {
+      updateModeBadge('KHÔNG TẢI ĐƯỢC ABLY SDK', true);
+      return;
+    }
+    const cfg = getAblyConfig();
+    if (!cfg.key) {
+      updateModeBadge('CHƯA CẤU HÌNH ABLY KEY', true);
+      return;
+    }
+
+    // Tài khoản MAU bắt buộc clientId trên device (không có thì 401).
+    const realtime = AblyPubSub.createClient({
+      key: cfg.key,
+      clientId: 'obs-' + Math.random().toString(36).slice(2, 8)
+    });
+    state.ably = realtime;
+
+    realtime.connection.on('connected', () => {
+      state.ablyConnected = true;
+      // Nối lại Ably xong: về trạng thái chờ live ngay; event status
+      // (heartbeat ≤10s) sẽ sửa thành LIVE nếu live đã gắn.
+      if (state.mode === 'live') updateModeBadge(`CHỜ LIVE @${state.liveUser}`, false);
+    });
+    realtime.connection.on('disconnected', () => {
+      state.ablyConnected = false;
+      if (state.mode === 'live') updateModeBadge(`MẤT KẾT NỐI @${state.liveUser}`, true);
+    });
+    realtime.connection.on('suspended', () => {
+      state.ablyConnected = false;
+      if (state.mode === 'live') updateModeBadge(`MẤT KẾT NỐI @${state.liveUser}`, true);
+    });
+    realtime.connection.on('failed', (err) => {
+      state.ablyConnected = false;
+      if (state.mode === 'live') updateModeBadge(`MẤT KẾT NỐI @${state.liveUser}`, true);
+      console.error('[Ably] connection failed:', err && err.message ? err.message : err);
+    });
+
+    const channel = realtime.channels.get(cfg.channel);
+    state.ablyChannel = channel;
+
+    channel.on('attached', (change) => {
+      // Lần attach đầu resumed=false là bình thường. Attach lại sau mà
+      // resumed=false nghĩa là Ably không resume được — có thể đã miss
+      // vài event trong lúc rớt (hơn ~2 phút); game vẫn chạy tiếp.
+      if (state.ablyAttachedOnce && change && change.resumed === false) {
+        console.warn('[Ably] channel re-attached without resume — có thể thiếu vài event');
+      }
+      state.ablyAttachedOnce = true;
+    });
+    channel.on('failed', (err) => {
+      console.error('[Ably] channel failed:', err && err.message ? err.message : err);
+    });
+
+    channel.subscribe('comment', onAblyComment);
+    channel.subscribe('like', onAblyLike);
+    channel.subscribe('gift', onAblyGift);
+    channel.subscribe('product', onAblyProduct);
+    channel.subscribe('status', onAblyStatus);
+  }
+
+  /* =========================================================================
+   * 16. START, PAUSE/RESUME, SHORTCUTS
+   * ========================================================================= */
+
+  function startGame() {
+    if (state.started) return;
+    state.started = true;
+    state.paused = false;
+
+    if (dom.startOverlay) {
+      dom.startOverlay.classList.add('hidden');
+    }
+
+    if (AudioEngine.isEnabled()) {
+      AudioEngine.startMusic();
+    }
+
+    const now = Date.now();
+    lastTickAt = now;
+    state.lastBotCastAt = now - 1800; // First demo bot casts promptly after Start
+    state.nextBotCastDelayMs = 2500;
+    state.lastBotChatAt = now;
+    state.lastBotGiftAt = now;
+    state.nextBotGiftDelayMs = 45000 + Math.floor(Math.random() * 15000);
+
+    startNewSession(true);
+
+    if (state.mode === 'live') {
+      connectAbly();
+    }
+
+    if (!tickTimerId) {
+      tickTimerId = setInterval(() => tick(), 100);
+    }
+    startRenderLoop();
+  }
+
+  function togglePause() {
+    if (!state.started) return state.paused;
+    const now = Date.now();
+    if (!state.paused) {
+      state.paused = true;
+      state.pauseStartedAt = now;
+      AudioEngine.stopMusic();
+      TTS.stop();
+      if (dom.pauseBadge) dom.pauseBadge.classList.remove('hidden');
+    } else {
+      const pausedMs = Math.max(0, now - state.pauseStartedAt);
+      // Shift rod timestamps forward so waiting/biting windows resume smoothly without loss
+      state.rods.forEach((rod) => {
+        rod.castAt += pausedMs;
+        rod.biteScheduledAt += pausedMs;
+        if (rod.biteAt > 0) rod.biteAt += pausedMs;
+        if (rod.biteDeadline > 0) rod.biteDeadline += pausedMs;
+        if (rod.botJerkAt > 0) rod.botJerkAt += pausedMs;
+      });
+      if (state.fishermanMoodUntil > 0) state.fishermanMoodUntil += pausedMs;
+      state.lastBotCastAt += pausedMs;
+      state.lastBotGiftAt += pausedMs;
+      state.lastBotChatAt += pausedMs;
+      lastTickAt = now;
+
+      state.paused = false;
+      if (dom.pauseBadge) dom.pauseBadge.classList.add('hidden');
+      if (AudioEngine.isEnabled()) {
+        AudioEngine.startMusic();
+      }
+    }
+    return state.paused;
+  }
+
+  function handleKeydown(e) {
+    if (!e) return;
+    if (e.code === 'Space' || e.key === ' ') {
+      if (state.started) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        togglePause();
+      }
+    } else if (e.key === 's' || e.key === 'S') {
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      TTS.repeatLast();
+    }
+  }
+
+  /* =========================================================================
+   * 17. INITIALIZATION & PUBLIC API (FOR AUTOMATED TESTING)
+   * ========================================================================= */
+
+  function init() {
+    cacheDom();
+
+    if (config.cleanMode) {
+      document.body.classList.add('clean-mode');
+    }
+
+    TTS.setEnabled(config.ttsEnabled);
+    AudioEngine.setEnabled(config.musicEnabled);
+
+    if (state.mode === 'live') {
+      updateModeBadge(`CHỜ LIVE @${state.liveUser}`, false);
+      if (dom.startModeHint) {
+        dom.startModeHint.textContent = `Chế độ TikTok Live (@${state.liveUser}) • Tự động kết nối khi bấm Bắt đầu`;
+      }
+    } else {
+      updateModeBadge('DEMO TỰ ĐỘNG', false);
+      if (dom.startModeHint) {
+        dom.startModeHint.textContent = 'Chế độ Demo tự động • Bot tự câu cá & tặng quà';
+      }
+    }
+
+    if (dom.pondCanvas && typeof dom.pondCanvas.getContext === 'function') {
+      try { pondCtx = dom.pondCanvas.getContext('2d'); } catch (_e) { pondCtx = null; }
+    }
+    Confetti.init(dom.confettiCanvas);
+
+    renderGiftBoard();
+    renderProductBanner();
+    renderComments();
+    renderStats();
+    renderBiggestFish();
+    renderLeaderboards();
+    renderPondFrame(Date.now());
+
+    scaleStage();
+    window.addEventListener('resize', scaleStage);
+    window.addEventListener('keydown', handleKeydown);
+
+    if (dom.startBtn) {
+      dom.startBtn.addEventListener('click', startGame);
+    }
+
+    // Tự chạy trên OBS (?obs=1): tự bấm ▶ Bắt đầu khi mở link, không cần
+    // ai bấm. Lưu ý: không có thao tác chạm nên giọng MC/nhạc có thể bị
+    // Chrome chặn cho tới khi bấm Interact 1 lần vào Browser Source
+    // (giới hạn đã biết, như game đoán từ trước bản sửa mất tiếng).
+    // KHÔNG hiện nút 'Bấm để bật tiếng' ở chế độ OBS (không ai bấm được).
+    if (config.obsMode) {
+      setTimeout(startGame, 300);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  // Expose structured API for automated unit tests & playtest scripts (no UI controls)
+  window.CauCaGame = {
+    // Constants & Data
+    FISH_SPECIES,
+    GIFT_CATALOG,
+    COUNTDOWN_LINES,
+    BOT_NAMES,
+    ROD_SLOTS,
+    MAX_ROD_SLOTS,
+    SESSION_TARGET_FISH,
+    BITE_MIN_MS,
+    BITE_MAX_MS,
+    JERK_WINDOW_MS,
+    SUMMARY_DURATION_MS,
+    COUNTDOWN_SECONDS,
+    BOT_CATCH_RATE,
+
+    // Pure helpers
+    normalizeText,
+    isCastCommand,
+    numberToVietnamese,
+    rollFish,
+    parseUrlParams,
+
+    // State & getters
+    state,
+    sales, // BẢN BÁN HÀNG: { product, lastReplyAt, lastCtaAt, pendingLine, ctaIdx }
+    config,
+    getSortedFishers,
+    getSortedGifters,
+
+    // Game actions
+    startGame,
+    togglePause,
+    castRod,
+    triggerBite,
+    jerkRod,
+    escapeFish,
+    handleComment,
+    handleLike,
+    handleGift,
+    handleProductEvent,
+    isProductMention,
+    priceToSpeech,
+    handleAblyMessage,
+    tick,
+    startEndOfSession,
+    startCountdown,
+    startNewSession,
+    renderPondFrame,
+    renderGiftBoard,
+    renderLeaderboards,
+    renderBiggestFish,
+    renderComments,
+    buildHonorSpeech,
+
+    // Subsystems
+    AudioEngine,
+    TTS,
+    Confetti
+  };
+})();
