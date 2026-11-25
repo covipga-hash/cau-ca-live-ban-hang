@@ -948,3 +948,953 @@
     dom.biteAlert = document.getElementById('biteAlert');
     dom.toastArea = document.getElementById('toastArea');
     dom.giftBanner = document.getElementById('giftBanner');
+    dom.productBanner = document.getElementById('productBanner');
+    dom.productBannerText = document.getElementById('productBannerText');
+    dom.statRods = document.getElementById('statRods');
+    dom.statCaught = document.getElementById('statCaught');
+    dom.statEscaped = document.getElementById('statEscaped');
+    dom.biggestFishContent = document.getElementById('biggestFishContent');
+    dom.top3Board = document.getElementById('top3Board');
+    dom.top4to8Board = document.getElementById('top4to8Board');
+    dom.giftSuggestionBox = document.getElementById('giftSuggestionBox');
+    dom.confettiCanvas = document.getElementById('confettiCanvas');
+    dom.pauseBadge = document.getElementById('pauseBadge');
+    dom.summaryOverlay = document.getElementById('summaryOverlay');
+    dom.summarySessionLabel = document.getElementById('summarySessionLabel');
+    dom.summaryHighlights = document.getElementById('summaryHighlights');
+    dom.summaryTopFishers = document.getElementById('summaryTopFishers');
+    dom.summaryTopGifters = document.getElementById('summaryTopGifters');
+    dom.summaryBiggestFish = document.getElementById('summaryBiggestFish');
+    dom.summaryTimerFill = document.getElementById('summaryTimerFill');
+    dom.countdownOverlay = document.getElementById('countdownOverlay');
+    dom.countdownNumber = document.getElementById('countdownNumber');
+    dom.countdownSpeech = document.getElementById('countdownSpeech');
+    dom.startOverlay = document.getElementById('startOverlay');
+    dom.startBtn = document.getElementById('startBtn');
+    dom.startModeHint = document.getElementById('startModeHint');
+  }
+
+  /* =========================================================================
+   * 7. STAGE SCALING (FIT 1080x1920 TO ANY VIEWPORT)
+   * ========================================================================= */
+
+  function scaleStage() {
+    if (!dom.stage) return;
+    const vw = window.innerWidth || 1080;
+    const vh = window.innerHeight || 1920;
+    // Viewport ngắn hơn 9:16 (Chrome điện thoại còn thanh tab/địa chỉ/điều hướng,
+    // hoặc cửa sổ PC không fullscreen): thu ngắn chiều cao stage để scale theo
+    // chiều rộng — game lấp đầy viewport.
+    // V4 chỉ thu ngắn stage, giữ ao 900px -> bảng dưới (feed) bị co về ~0 và biến mất
+    // trên điện thoại (Cơ báo 25/11 17:24). V4.1: ao co theo chiều cao còn lại (giữ
+    // đúng tỉ lệ 1040:900, không méo hình), feed luôn giữ tối thiểu 280px — nhưng
+    // ao chỉ còn ~67% bề rộng trên viewport ngắn (Cơ báo "bé quá" 25/11 22:36,
+    // viewport ~1080x1407: ao 724px).
+    // V4.5: ao LUÔN giữ đúng kích thước gốc 1040x900 (to nhất có thể); stage cao
+    // thành FIXED_REST + 900 + FEED_MIN = 1680 và scale toàn cục thu nhỏ stage
+    // vừa viewport. Ao trên màn hình: 1080x1407 -> 871px (was 724px, +20%),
+    // 1080x1080 -> 669px (was 394px). Đồng thời sửa lỗi v4.1: ở tỉ lệ 1.56-1.78
+    // ao từng bị kéo rộng quá 1040 và cắt 2 bên.
+    // Các phần cố định ngoài ao và feed (header 64 + stats 106 + top3 186 + gift 64
+    // + padding 28 + gap 50) ≈ 500px.
+    // BẢN BÁN HÀNG: + banner sản phẩm ghim 52px + gap 10px = 562px.
+    const FIXED_REST = 562;
+    const FEED_MIN = 280;
+    const POND_W = 1040;
+    const POND_H = 900;
+    let stageH = 1920;
+    if (vh / vw < 1920 / 1080) {
+      const natural = Math.floor((vh * 1080) / vw);
+      stageH = Math.max(FIXED_REST + POND_H + FEED_MIN, natural);
+      const pondH = POND_H;
+      const pondW = POND_W;
+      dom.stage.style.height = stageH + 'px';
+      if (dom.pondCanvas) {
+        dom.pondCanvas.style.width = pondW + 'px';
+        dom.pondCanvas.style.height = pondH + 'px';
+        const pondStageEl = dom.pondCanvas.parentElement;
+        if (pondStageEl) {
+          pondStageEl.style.width = pondW + 'px';
+          pondStageEl.style.height = pondH + 'px';
+        }
+      }
+    } else {
+      dom.stage.style.height = '';
+      if (dom.pondCanvas) {
+        dom.pondCanvas.style.width = '';
+        dom.pondCanvas.style.height = '';
+        const pondStageEl = dom.pondCanvas.parentElement;
+        if (pondStageEl) {
+          pondStageEl.style.width = '';
+          pondStageEl.style.height = '';
+        }
+      }
+    }
+    const scale = Math.min(vw / 1080, vh / stageH);
+    dom.stage.style.transform = `scale(${scale})`;
+  }
+
+  /* =========================================================================
+   * 8. RENDERING — BANNER, BOARDS, STATS, TOASTS
+   * ========================================================================= */
+
+  function escapeHtml(str) {
+    return String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function getSortedFishers() {
+    return Object.values(state.playerScores)
+      .filter((p) => p.points > 0)
+      .sort((a, b) => (b.points - a.points) || (b.catches - a.catches) || a.username.localeCompare(b.username));
+  }
+
+  function getSortedGifters() {
+    return Object.values(state.giftScores)
+      .filter((g) => g.diamonds > 0)
+      .sort((a, b) => (b.diamonds - a.diamonds) || (b.count - a.count) || a.username.localeCompare(b.username));
+  }
+
+  /**
+   * Single source of truth for rendering "🎁 Top tặng quà" (top of banner)
+   * using the exact same `state.giftScores` store as end-of-session honors.
+   */
+  function renderGiftBoard() {
+    if (!dom.giftTopList) return;
+    const topGifters = getSortedGifters().slice(0, 3);
+    if (topGifters.length === 0) {
+      dom.giftTopList.innerHTML = '<span class="gift-empty">Chưa có quà tặng trong phiên</span>';
+      return;
+    }
+    dom.giftTopList.innerHTML = topGifters
+      .map((g, idx) => {
+        const rank = idx + 1;
+        const prefix = rank === 1 ? '👑 ' : `#${rank} `;
+        const avatarHtml = g.avatar
+          ? `<img src="${escapeHtml(g.avatar)}" class="gift-avatar" alt="">`
+          : `<span class="gift-avatar-fallback">${escapeHtml((g.username || '?').slice(0, 1))}</span>`;
+        return `<span class="gift-leader-pill rank-${rank}">${prefix}${avatarHtml}${escapeHtml(g.username)} <span class="gift-leader-diamonds">${g.diamonds}💎</span> <span class="gift-leader-count">• ${g.count} quà</span></span>`;
+      })
+      .join('');
+  }
+
+  function pushComment(entry) {
+    state.comments.unshift({
+      id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      username: entry.username || 'Khán giả',
+      text: entry.text || '',
+      type: entry.type || 'chat', // 'chat' | 'catch' | 'gift' | 'escape'
+      badge: entry.badge || ''
+    });
+    if (state.comments.length > MAX_BANNER_COMMENTS) {
+      state.comments.length = MAX_BANNER_COMMENTS;
+    }
+    renderComments();
+  }
+
+  function renderComments() {
+    if (!dom.commentList) return;
+    if (state.comments.length === 0) {
+      dom.commentList.innerHTML = '<li class="comment-row comment-waiting">Đang chờ bình luận…</li>';
+      return;
+    }
+    dom.commentList.innerHTML = state.comments
+      .map((c, idx) => {
+        const enterCls = idx === 0 ? ' comment-enter' : '';
+        const typeCls = c.type ? ` type-${c.type}` : '';
+        let badgeHtml = '';
+        if (c.type === 'catch') {
+          badgeHtml = `<span class="comment-badge badge-catch">${escapeHtml(c.badge || '🎣 CÂU ĐƯỢC')}</span>`;
+        } else if (c.type === 'gift') {
+          badgeHtml = `<span class="comment-badge badge-gift">${escapeHtml(c.badge || '🎁 QUÀ TẶNG')}</span>`;
+        } else if (c.type === 'escape') {
+          badgeHtml = `<span class="comment-badge badge-escape">${escapeHtml(c.badge || '💨 CHẠY MẤT')}</span>`;
+        }
+        const userHtml = c.type === 'gift'
+          ? ''
+          : `<span class="comment-user">${escapeHtml(c.username)}:</span>`;
+        return `<li class="comment-row${typeCls}${enterCls}">${badgeHtml}${userHtml}<span class="comment-text">${escapeHtml(c.text)}</span></li>`;
+      })
+      .join('');
+  }
+
+  function renderStats() {
+    if (dom.statRods) dom.statRods.textContent = `${state.rods.length}/${MAX_ROD_SLOTS}`;
+    if (dom.statCaught) dom.statCaught.textContent = `${state.sessionCaught}/${SESSION_TARGET_FISH}`;
+    if (dom.statEscaped) dom.statEscaped.textContent = String(state.sessionEscaped);
+    if (dom.sessionProgress) {
+      dom.sessionProgress.textContent = `Phiên #${state.sessionNumber} · ${state.sessionCaught}/${SESSION_TARGET_FISH} cá`;
+    }
+  }
+
+  function renderBiggestFish() {
+    if (!dom.biggestFishContent) return;
+    if (!state.biggestFish) {
+      dom.biggestFishContent.className = 'biggest-fish-value waiting';
+      dom.biggestFishContent.textContent = 'Đang chờ cao thủ câu con cá đầu tiên…';
+      return;
+    }
+    const bf = state.biggestFish;
+    dom.biggestFishContent.className = 'biggest-fish-value';
+    dom.biggestFishContent.textContent = `👑 ${bf.username} — ${bf.name} ${formatWeight(bf.weight)}kg · ${bf.points}đ`;
+  }
+
+  function renderLeaderboards() {
+    const sorted = getSortedFishers();
+    const top3 = sorted.slice(0, 3);
+    const top4to8 = sorted.slice(3, 8);
+
+    const newTop3Keys = top3.map((p) => userKey(p.username));
+    const newlyEntered = new Set(newTop3Keys.filter((k) => !state.prevTop3Keys.includes(k)));
+    state.prevTop3Keys = newTop3Keys;
+
+    if (dom.top3Board) {
+      if (top3.length === 0) {
+        dom.top3Board.innerHTML = '<div class="top3-empty">Chưa có cần thủ nào ghi điểm — quăng cần ngay!</div>';
+      } else {
+        const medals = ['👑', '🥈', '🥉'];
+        dom.top3Board.innerHTML = top3
+          .map((p, idx) => {
+            const rank = idx + 1;
+            const flashCls = newlyEntered.has(userKey(p.username)) ? ' flash-top3' : '';
+            return `
+              <div class="top3-card rank-${rank}${flashCls}" data-rank="${rank}">
+                <div class="top3-rank-badge">${medals[idx]} HẠNG ${rank}</div>
+                <div class="top3-name">${escapeHtml(p.username)}</div>
+                <div class="top3-points">${p.points.toLocaleString('vi-VN')}đ</div>
+                <div class="top3-meta">${p.catches} con cá</div>
+              </div>
+            `;
+          })
+          .join('');
+      }
+    }
+
+    if (dom.top4to8Board) {
+      if (top4to8.length === 0) {
+        dom.top4to8Board.innerHTML = sorted.length === 0
+          ? ''
+          : '<div class="lb-empty-sub">Các hạng 4–8 sẽ hiện khi có thêm cần thủ ghi điểm…</div>';
+      } else {
+        dom.top4to8Board.innerHTML = top4to8
+          .map((p, idx) => {
+            const rank = idx + 4;
+            return `
+              <div class="lb-row" data-rank="${rank}">
+                <div class="lb-row-left">
+                  <span class="lb-rank">${rank}</span>
+                  <span class="lb-name">${escapeHtml(p.username)}</span>
+                </div>
+                <div class="lb-row-right">
+                  <span class="lb-catches">${p.catches} cá</span>
+                  <span class="lb-points">${p.points.toLocaleString('vi-VN')}đ</span>
+                </div>
+              </div>
+            `;
+          })
+          .join('');
+      }
+    }
+  }
+
+  function renderBiteAlert() {
+    if (!dom.biteAlert) return;
+    const bitingRods = state.rods.filter((r) => r.status === 'biting');
+    if (bitingRods.length === 0 || state.phase !== 'playing') {
+      dom.biteAlert.classList.add('hidden');
+      dom.biteAlert.textContent = '';
+      return;
+    }
+    const latest = bitingRods[bitingRods.length - 1];
+    const jerkProgress = Math.min(JERK_TYM_NEEDED, Math.max(0, (latest.likeBonus || 0) - (latest.bonusAtBite || 0)));
+    dom.biteAlert.textContent = `🐟 CÁ CẮN CÂU! ${latest.username} gõ "lên" hoặc thả tim (${jerkProgress}/10 Tym) để giật!`;
+    dom.biteAlert.classList.remove('hidden');
+  }
+
+  function showToast(message, variant) {
+    if (!dom.toastArea) return;
+    const el = document.createElement('div');
+    el.className = 'toast-pill' + (variant ? ` ${variant}` : '');
+    el.textContent = message;
+    dom.toastArea.appendChild(el);
+    while (dom.toastArea.children.length > 2) {
+      dom.toastArea.removeChild(dom.toastArea.firstChild);
+    }
+    setTimeout(() => {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, variant === 'huge' ? 4500 : 3000);
+  }
+
+  // Banner quà nổi bật: avatar + tên + quà + xu + ưu đãi, hiện 5 giây.
+  let giftBannerTimer = null;
+  function showGiftBanner(info) {
+    if (!dom.giftBanner || !info) return;
+    const qty = info.repeatCount > 1 ? ` ×${info.repeatCount}` : '';
+    const avatarHtml = info.avatar
+      ? `<img src="${escapeHtml(info.avatar)}" class="gift-banner-avatar" alt="">`
+      : `<span class="gift-banner-avatar-fallback">🎁</span>`;
+    dom.giftBanner.innerHTML = `${avatarHtml}<div class="gift-banner-text"><div class="gift-banner-line"><strong>${escapeHtml(info.username)}</strong> đã tặng <strong>${escapeHtml(info.giftName)}${qty}</strong> · ${info.diamondCount}💎</div><div class="gift-banner-perk">${escapeHtml(info.perkText || '')}</div></div>`;
+    dom.giftBanner.classList.remove('hidden');
+    if (giftBannerTimer) clearTimeout(giftBannerTimer);
+    giftBannerTimer = setTimeout(() => {
+      if (dom.giftBanner) dom.giftBanner.classList.add('hidden');
+    }, 5000);
+  }
+
+  function updateModeBadge(text, isLive) {
+    if (!dom.modeBadge) return;
+    dom.modeBadge.textContent = text;
+    dom.modeBadge.classList.toggle('live', Boolean(isLive));
+  }
+
+  /* =========================================================================
+   * 9. CORE FISHING LOGIC
+   * ========================================================================= */
+
+  function findRodByUser(username) {
+    const key = userKey(username);
+    return state.rods.find((r) => r.key === key) || null;
+  }
+
+  function findFreeSlot() {
+    const used = new Set(state.rods.map((r) => r.slot));
+    for (let i = 0; i < MAX_ROD_SLOTS; i++) {
+      if (!used.has(i)) return i;
+    }
+    return -1;
+  }
+
+  function setFishermanMood(mood, durationMs) {
+    state.fishermanMood = mood;
+    state.fishermanMoodUntil = durationMs ? Date.now() + durationMs : 0;
+  }
+
+  function castRod(username, options) {
+    const cleanName = String(username || '').trim();
+    if (!cleanName) return null;
+    const opts = options || {};
+    if (state.phase !== 'playing' && !opts.force) return null;
+
+    const key = userKey(cleanName);
+    if (findRodByUser(cleanName)) {
+      return null; // Each viewer has max 1 active rod
+    }
+
+    const slot = findFreeSlot();
+    if (slot === -1) {
+      return null; // Max 10 visible slots full
+    }
+
+    const now = typeof opts.now === 'number' ? opts.now : Date.now();
+    const waitMs = typeof opts.waitMs === 'number'
+      ? opts.waitMs
+      : BITE_MIN_MS + Math.floor(Math.random() * (BITE_MAX_MS - BITE_MIN_MS + 1));
+
+    const pendingBoost = state.pendingBoosts[key] || null;
+    if (pendingBoost) {
+      delete state.pendingBoosts[key];
+    }
+
+    const rod = {
+      key,
+      username: cleanName,
+      slot,
+      status: 'waiting', // 'waiting' | 'biting'
+      castAt: now,
+      biteScheduledAt: now + waitMs,
+      biteAt: 0,
+      biteDeadline: 0,
+      boost: opts.boost || pendingBoost || null,
+      isBot: Boolean(opts.isBot),
+      botJerkAt: 0,
+      likeBonus: 0, // số Tym của chủ cần từ lúc quăng (mỗi Tym +0,1% tỉ lệ trúng)
+      bonusAtBite: 0 // likeBonus lúc cá cắn — Tym trước khi cắn chỉ tăng %, không tính vào 10 Tym
+    };
+
+    state.rods.push(rod);
+    // MC đọc tên người chơi khi quăng cần (chỉ người thật, bot không nói).
+    if (!rod.isBot) TTS.speak(`${cleanName} đã quăng cần!`);
+    renderStats();
+    return rod;
+  }
+
+  function triggerBite(usernameOrRod, nowOverride) {
+    const rod = typeof usernameOrRod === 'string'
+      ? findRodByUser(usernameOrRod)
+      : usernameOrRod;
+    if (!rod || rod.status !== 'waiting') return false;
+
+    const now = typeof nowOverride === 'number' ? nowOverride : Date.now();
+    rod.status = 'biting';
+    rod.biteAt = now;
+    rod.biteDeadline = now + JERK_WINDOW_MS;
+    rod.bonusAtBite = rod.likeBonus || 0;
+
+    // Schedule bot reaction (~60% catch rate)
+    if (rod.isBot) {
+      state.stats.botBites += 1;
+      if (Math.random() < BOT_CATCH_RATE) {
+        rod.botJerkAt = now + 550 + Math.floor(Math.random() * 1700);
+      } else {
+        rod.botJerkAt = 0; // Misses the 10s window -> fish escapes
+      }
+    }
+
+    setFishermanMood('reeling', 0);
+    AudioEngine.playSplash();
+    renderBiteAlert();
+    TTS.speak(`Cá cắn câu! ${rod.username} bình luận lên hoặc thả 10 tim để giật cần lên!`);
+    return true;
+  }
+
+  function escapeFish(rod) {
+    if (!rod) return false;
+    const idx = state.rods.indexOf(rod);
+    if (idx !== -1) state.rods.splice(idx, 1);
+
+    // Boost is consumed ONLY after a catch — preserve if escaped
+    if (rod.boost) {
+      const existing = state.pendingBoosts[rod.key];
+      if (existing !== 'gold') {
+        state.pendingBoosts[rod.key] = rod.boost;
+      }
+    }
+
+    state.sessionEscaped += 1;
+    setFishermanMood('disappointed', 2200);
+    AudioEngine.playEscape();
+
+    pushComment({
+      username: rod.username,
+      type: 'escape',
+      badge: '💨 CHẠY MẤT',
+      text: '💨 cá chạy mất rồi!'
+    });
+
+    renderStats();
+    renderBiteAlert();
+    TTS.speak(`Tiếc quá, cá của ${rod.username} chạy mất rồi!`);
+    return true;
+  }
+
+  function jerkRod(username, options) {
+    const opts = options || {};
+    const rod = findRodByUser(username);
+    if (!rod) return { ok: false, reason: 'no_rod' };
+
+    // Jerking while waiting does nothing and keeps rod in water
+    if (rod.status === 'waiting') {
+      return { ok: false, reason: 'waiting' };
+    }
+
+    const now = typeof opts.now === 'number' ? opts.now : Date.now();
+    // Late jerk beyond 10-second window -> fish escapes
+    if (now - rod.biteAt > JERK_WINDOW_MS) {
+      escapeFish(rod);
+      return { ok: false, caught: false, escaped: true, reason: 'late' };
+    }
+
+    // Tỉ lệ trúng: gốc 50% + 0,1% mỗi Tym chủ cần (tối đa 95%).
+    // Giật hụt -> cá chạy mất như giật trễ.
+    // Bot giữ kiểu cũ: giật kịp trong 10s là trúng (~60% do BOT_CATCH_RATE) — tỉ lệ hụt
+    // chỉ áp cho người chơi thật, tránh bot chạy mất quá nhiều làm game im ắng.
+    const rngFn = typeof opts.rng === 'function' ? opts.rng : Math.random;
+    if (!rod.isBot) {
+      const catchChance = Math.min(CATCH_BASE_PCT + CATCH_PER_LIKE_PCT * (rod.likeBonus || 0), CATCH_MAX_PCT);
+      if (rngFn() * 100 >= catchChance) {
+        escapeFish(rod);
+        return { ok: false, caught: false, escaped: true, reason: 'miss', chance: catchChance };
+      }
+    }
+
+    // Successful catch!
+    const fish = rollFish(rod.boost, opts.rng);
+    const usedBoost = rod.boost;
+    rod.boost = null; // Consumed after one catch
+
+    const idx = state.rods.indexOf(rod);
+    if (idx !== -1) state.rods.splice(idx, 1);
+
+    if (rod.isBot) {
+      state.stats.botCatches += 1;
+    }
+
+    // Update player score (points come ONLY from caught fish)
+    if (!state.playerScores[rod.key]) {
+      state.playerScores[rod.key] = { username: rod.username, points: 0, catches: 0 };
+    }
+    state.playerScores[rod.key].username = rod.username;
+    state.playerScores[rod.key].points += fish.points;
+    state.playerScores[rod.key].catches += 1;
+
+    state.sessionCaught += 1;
+
+    // Show the caught fish big above the water for ~2.5s.
+    // NOTE: rod.slot is an INDEX into ROD_SLOTS (not the entry) — resolve it
+    // first; rod.slot.bobberX is undefined and drew the flash at NaN (invisible).
+    const flashSlot = ROD_SLOTS[rod.slot] || ROD_SLOTS[0];
+    state.caughtFlash = {
+      speciesId: fish.id,
+      x: flashSlot.bobberX,
+      y: flashSlot.bobberY,
+      until: now + 2500
+    };
+
+    // Update biggest fish strictly if heavier
+    if (!state.biggestFish || fish.weight > state.biggestFish.weight) {
+      state.biggestFish = {
+        username: rod.username,
+        name: fish.name,
+        rarity: fish.rarity,
+        weight: fish.weight,
+        points: fish.points
+      };
+      renderBiggestFish();
+    }
+
+    const weightStr = formatWeight(fish.weight);
+    const boostNote = usedBoost === 'gold' ? ' [★ Cần vàng]' : usedBoost === 'bait' ? ' [● Mồi ngon]' : '';
+
+    pushComment({
+      username: rod.username,
+      type: 'catch',
+      badge: '🎣 CÂU ĐƯỢC',
+      text: `${fish.name} ${weightStr}kg (+${fish.points}đ)${boostNote}`
+    });
+
+    AudioEngine.playSplash();
+    AudioEngine.playReel();
+
+    if (fish.rarity === 'huge') {
+      AudioEngine.playFanfare();
+      Confetti.burst(120);
+      setFishermanMood('excited', 3000);
+      showToast(`🌟 CÁ KHỦNG! ${rod.username} câu được ${fish.name} ${weightStr}kg (+${fish.points}đ)!`, 'huge');
+      TTS.speak(
+        `Cá khủng! Xin chúc mừng ${rod.username} vừa câu được ${fish.name} nặng ${weightStr} ki lô gam, ghi trọn ${numberToVietnamese(fish.points)} điểm!`,
+        { rate: 1.05, pitch: 1.15 }
+      );
+    } else if (fish.rarity === 'rare') {
+      AudioEngine.playFanfare();
+      setFishermanMood('excited', 2400);
+      showToast(`✨ Cá hiếm! ${rod.username} câu được ${fish.name} ${weightStr}kg (+${fish.points}đ)`);
+      TTS.speak(
+        `Tuyệt vời! ${rod.username} câu được ${fish.name} nặng ${weightStr} ki lô gam, cộng ${numberToVietnamese(fish.points)} điểm!`
+      );
+    } else {
+      setFishermanMood('waiting', 0);
+      TTS.speak(
+        `${rod.username} câu được ${fish.name} nặng ${weightStr} ki lô gam, cộng ${numberToVietnamese(fish.points)} điểm!`
+      );
+    }
+
+    renderStats();
+    renderLeaderboards();
+    renderBiteAlert();
+
+    if (state.sessionCaught >= SESSION_TARGET_FISH && state.phase === 'playing') {
+      startEndOfSession();
+    }
+
+    return { ok: true, caught: true, fish };
+  }
+
+  /* =========================================================================
+   * 10. VIEWER INTERACTIONS: COMMENT, LIKE, GIFT
+   * ========================================================================= */
+
+  function handleComment(username, text, options) {
+    const cleanName = String(username || '').trim();
+    const cleanText = String(text || '').trim();
+    if (!cleanName || !cleanText) return { casted: false };
+
+    pushComment({
+      username: cleanName,
+      type: 'chat',
+      text: cleanText
+    });
+
+    if (isCastCommand(cleanText)) {
+      const rod = castRod(cleanName, options);
+      return { casted: Boolean(rod), rod };
+    }
+
+    if (isJerkCommand(cleanText)) {
+      // 'Lên' giật ngay như cũ (Cơ 25/11 'Như cũ nhé': giữ 'Lên' + tặng 1 xu,
+      // THÊM 10 Tym làm cách lên câu nữa — không thay thế).
+      const result = jerkRod(cleanName, options);
+      return { casted: false, jerked: Boolean(result && result.caught), result };
+    }
+
+    // BẢN BÁN HÀNG: bình luận nhắc tới sản phẩm -> MC trả lời lúc rảnh.
+    maybeReplyProductComment(cleanName, cleanText, options);
+    return { casted: false };
+  }
+
+  function handleLike(username, options) {
+    const cleanName = String(username || '').trim();
+    if (!cleanName) return { action: 'ignored' };
+    const opts = options || {};
+    // Số Tym trong 1 event (TikTok gộp nhiều Tym vào 1 event).
+    const likeCount = Math.max(1, Number(opts.likeCount) || 1);
+
+    const rod = findRodByUser(cleanName);
+    if (!rod) {
+      const newRod = castRod(cleanName, options);
+      return { action: newRod ? 'cast' : 'ignored', rod: newRod };
+    }
+    if (rod.status === 'biting') {
+      // Tym của chủ cần: +0,1% tỉ lệ trúng/cái (từ lúc quăng) VÀ đếm vào 10 Tym
+      // để lên câu (chỉ tính Tym từ lúc cá cắn). Đủ 10 Tym -> tự giật lên.
+      rod.likeBonus = (rod.likeBonus || 0) + likeCount;
+      const progress = (rod.likeBonus || 0) - (rod.bonusAtBite || 0);
+      renderBiteAlert();
+      if (progress >= JERK_TYM_NEEDED) {
+        const result = jerkRod(cleanName, options);
+        return { action: result.caught ? 'catch' : 'escape', result };
+      }
+      return { action: 'jerk_progress', progress, rod };
+    }
+    // Rod is waiting -> mỗi Tym +0,1% tỉ lệ trúng (ẩn số), cần vẫn ở dưới nước
+    rod.likeBonus = (rod.likeBonus || 0) + likeCount;
+    return { action: 'waiting_noop', rod };
+  }
+
+  function handleGift(payload, options) {
+    if (!payload) return null;
+    const username = String(payload.username || '').trim();
+    if (!username) return null;
+
+    const giftName = String(payload.giftName || 'Quà tặng').trim();
+    const diamondCount = Math.max(0, Number(payload.diamondCount) || 0);
+    const repeatCount = Math.max(1, Number(payload.repeatCount) || 1);
+    const totalDiamonds = diamondCount * repeatCount;
+    const key = userKey(username);
+
+    // Track total diamonds for Top tặng quà — NEVER adds game points!
+    if (!state.giftScores[key]) {
+      state.giftScores[key] = { username, diamonds: 0, count: 0, avatar: '' };
+    }
+    state.giftScores[key].username = username;
+    if (payload.avatar) state.giftScores[key].avatar = payload.avatar;
+    state.giftScores[key].diamonds += totalDiamonds;
+    state.giftScores[key].count += repeatCount;
+    renderGiftBoard();
+
+    // Tier determined by SINGLE gift value (diamondCount), NOT totalDiamonds
+    let tier = 'support';
+    let boostApplied = null;
+
+    if (diamondCount >= 10) {
+      tier = 'gold';
+      boostApplied = 'gold';
+    } else if (diamondCount >= 5) {
+      tier = 'bait';
+      boostApplied = 'bait';
+    }
+
+    // Banner line for gift
+    if (diamondCount === 1) {
+      const qtyStr = repeatCount > 1 ? ` ×${repeatCount}` : '';
+      pushComment({
+        username,
+        type: 'gift',
+        badge: '🎁 1💎',
+        text: `🎁 ${username} đã tặng ${giftName}${qtyStr} — Ủng hộ chủ thớt!`
+      });
+    } else {
+      pushComment({
+        username,
+        type: 'gift',
+        badge: `🎁 ${diamondCount}💎`,
+        text: `🎁 ${username} đã tặng ${giftName} ×${repeatCount}`
+      });
+    }
+
+    if (boostApplied) {
+      // Attach immediately to active rod if fishing, otherwise wait for next cast
+      const activeRod = findRodByUser(username);
+      if (activeRod) {
+        if (activeRod.boost !== 'gold' || boostApplied === 'gold') {
+          activeRod.boost = boostApplied;
+        }
+      } else {
+        if (state.pendingBoosts[key] !== 'gold' || boostApplied === 'gold') {
+          state.pendingBoosts[key] = boostApplied;
+        }
+      }
+
+      if (boostApplied === 'gold') {
+        const line = `🎁 ${username} — lần câu sau có Cần vàng!`;
+        pushComment({ username, type: 'gift', badge: '★ CẦN VÀNG', text: line });
+        AudioEngine.playFanfare();
+        TTS.speak(`Cảm ơn ${username} đã tặng ${giftName}! Lần câu sau của ${username} có Cần vàng, chắc chắn câu cá hiếm hoặc cá khủng!`);
+      } else {
+        const line = `🎁 ${username} — lần câu sau có Mồi ngon!`;
+        pushComment({ username, type: 'gift', badge: '● MỒI NGON', text: line });
+        TTS.speak(`Cảm ơn ${username} đã tặng ${giftName}! Lần câu sau của ${username} có Mồi ngon, tăng tỉ lệ cá to!`);
+      }
+    }
+
+    // Banner quà nổi bật cho MỌI món quà (avatar + tên + quà + xu + ưu đãi),
+    // hiện 5 giây để đọc rồi tự ẩn.
+    const perkText = boostApplied === 'gold'
+      ? 'Cần vàng — lần câu sau chắc cá hiếm'
+      : boostApplied === 'bait'
+        ? 'Mồi ngon — lần câu sau dễ cá to'
+        : 'Ủng hộ chủ thớt';
+    showGiftBanner({
+      avatar: payload.avatar || '',
+      username,
+      giftName,
+      diamondCount,
+      repeatCount,
+      perkText
+    });
+
+    // Tặng 1 xu giật cần lên như cũ (Cơ 25/11 'Như cũ nhé': giữ tặng 1 xu,
+    // THÊM 10 Tym làm cách lên câu nữa — không thay thế).
+    if (diamondCount === 1) {
+      const rod = findRodByUser(username);
+      if (rod && rod.status === 'biting') {
+        jerkRod(username, options || {});
+      }
+    }
+
+    return { tier, boostApplied, totalDiamonds };
+  }
+
+  /* =========================================================================
+   * 11. END-OF-SESSION FLOW (10s SUMMARY -> 5s COUNTDOWN -> AUTO NEW SESSION)
+   * ========================================================================= */
+
+  function buildHonorSpeech(topFishers, topGifters, biggestFish) {
+    const parts = [`Phiên câu số ${state.sessionNumber} đã kết thúc!`];
+    if (topFishers.length > 0) {
+      const t1 = topFishers[0];
+      parts.push(`Chúc mừng quán quân ${t1.username} đạt ${numberToVietnamese(t1.points)} điểm.`);
+    }
+    if (topGifters.length > 0) {
+      const g1 = topGifters[0];
+      parts.push(`Vua quà tặng là ${g1.username} với ${numberToVietnamese(g1.diamonds)} kim cương, xin cảm ơn rất nhiều!`);
+    }
+    if (biggestFish) {
+      parts.push(`Con cá khủng nhất phiên thuộc về ${biggestFish.username} với ${biggestFish.name} nặng ${formatWeight(biggestFish.weight)} ki lô gam.`);
+    }
+    return parts.join(' ');
+  }
+
+  function startEndOfSession() {
+    state.phase = 'summary';
+    state.summaryRemainingMs = SUMMARY_DURATION_MS;
+    state.rods = [];
+    renderBiteAlert();
+    renderStats();
+
+    const topFishers = getSortedFishers().slice(0, 3);
+    const topGifters = getSortedGifters().slice(0, 3);
+    const bf = state.biggestFish;
+
+    if (dom.summarySessionLabel) {
+      dom.summarySessionLabel.textContent = `PHIÊN #${state.sessionNumber} HOÀN TẤT · ${state.sessionCaught} CÁ`;
+    }
+
+    if (dom.summaryHighlights) {
+      const lines = [];
+      if (topFishers.length > 0) {
+        lines.push(`👑 Top 1: ${topFishers[0].username} — ${topFishers[0].points.toLocaleString('vi-VN')} điểm`);
+      }
+      if (topGifters.length > 0) {
+        lines.push(`🎁 Vua quà tặng: ${topGifters[0].username} — ${topGifters[0].diamonds.toLocaleString('vi-VN')} kim cương`);
+      }
+      if (bf) {
+        lines.push(`🐟 Cá khủng nhất phiên: ${bf.username} — ${bf.name} ${formatWeight(bf.weight)}kg`);
+      }
+      dom.summaryHighlights.innerHTML = lines
+        .map((l) => `<div class="summary-highlight-line">${escapeHtml(l)}</div>`)
+        .join('');
+    }
+
+    if (dom.summaryTopFishers) {
+      dom.summaryTopFishers.innerHTML = topFishers.length === 0
+        ? '<li>Chưa có cần thủ</li>'
+        : topFishers
+            .map((p, i) => `<li><span>${['👑', '🥈', '🥉'][i]} ${escapeHtml(p.username)}</span><strong>${p.points.toLocaleString('vi-VN')}đ</strong></li>`)
+            .join('');
+    }
+
+    if (dom.summaryTopGifters) {
+      dom.summaryTopGifters.innerHTML = topGifters.length === 0
+        ? '<li>Chưa có quà tặng</li>'
+        : topGifters
+            .map((g, i) => `<li><span>${['👑', '#2', '#3'][i]} ${escapeHtml(g.username)}</span><strong>${g.diamonds.toLocaleString('vi-VN')}💎</strong></li>`)
+            .join('');
+    }
+
+    if (dom.summaryBiggestFish) {
+      dom.summaryBiggestFish.textContent = bf
+        ? `🐟 Cá khủng nhất phiên: ${bf.username} — ${bf.name} ${formatWeight(bf.weight)}kg (${bf.points}đ)`
+        : '🐟 Chưa ghi nhận cá khủng';
+    }
+
+    if (dom.summaryTimerFill) {
+      dom.summaryTimerFill.style.width = '100%';
+    }
+    if (dom.summaryOverlay) {
+      dom.summaryOverlay.classList.remove('hidden');
+    }
+
+    Confetti.burst(150);
+    AudioEngine.playFanfare();
+    const honorSpeech = buildHonorSpeech(topFishers, topGifters, bf);
+    TTS.speak(honorSpeech);
+  }
+
+  function startCountdown() {
+    state.phase = 'countdown';
+    state.countdownRemaining = COUNTDOWN_SECONDS;
+
+    if (dom.summaryOverlay) dom.summaryOverlay.classList.add('hidden');
+    if (dom.countdownOverlay) dom.countdownOverlay.classList.remove('hidden');
+    if (dom.countdownNumber) dom.countdownNumber.textContent = String(state.countdownRemaining);
+
+    const line = COUNTDOWN_LINES[Math.floor(Math.random() * COUNTDOWN_LINES.length)];
+    if (dom.countdownSpeech) dom.countdownSpeech.textContent = line;
+    TTS.speak(line);
+  }
+
+  function startNewSession(isFirst) {
+    if (!isFirst) {
+      state.sessionNumber += 1;
+    }
+    state.phase = 'playing';
+    state.sessionCaught = 0;
+    state.sessionEscaped = 0;
+    state.rods = [];
+    state.playerScores = Object.create(null);
+    state.giftScores = Object.create(null);
+    state.biggestFish = null;
+    state.prevTop3Keys = [];
+    state.fishermanMood = 'waiting';
+    state.fishermanMoodUntil = 0;
+
+    if (dom.summaryOverlay) dom.summaryOverlay.classList.add('hidden');
+    if (dom.countdownOverlay) dom.countdownOverlay.classList.add('hidden');
+
+    renderGiftBoard();
+    renderStats();
+    renderBiggestFish();
+    renderLeaderboards();
+    renderBiteAlert();
+
+    TTS.speak(
+      isFirst
+        ? 'Chào mừng cả nhà đến với Câu Cá Live! Thả tim hoặc bình luận câu để quăng cần ngay nào!'
+        : `Phiên câu số ${state.sessionNumber} bắt đầu! Mời cả nhà thả tim hoặc gõ câu để quăng cần nào!`
+    );
+  }
+
+  /* =========================================================================
+   * 12. DEMO MODE BOTS
+   * ========================================================================= */
+
+  function tickDemoBots(now) {
+    if (state.mode !== 'demo' || state.phase !== 'playing' || state.paused) return;
+
+    // 1. Bot casting every 2.5–6s (only when idle & slots available)
+    if (now - state.lastBotCastAt >= state.nextBotCastDelayMs) {
+      state.lastBotCastAt = now;
+      state.nextBotCastDelayMs = 2500 + Math.floor(Math.random() * 3500);
+
+      if (state.rods.length < MAX_ROD_SLOTS) {
+        const idleBots = BOT_NAMES.filter((name) => !findRodByUser(name));
+        if (idleBots.length > 0) {
+          const chosen = idleBots[Math.floor(Math.random() * idleBots.length)];
+          if (Math.random() < 0.65) {
+            handleComment(chosen, Math.random() < 0.7 ? 'câu' : 'thả cần', { isBot: true, now });
+          } else {
+            handleLike(chosen, { isBot: true, now });
+          }
+        }
+      }
+    }
+
+    // 2. Occasional bot chatter every 7–14s
+    if (now - state.lastBotChatAt >= 9500) {
+      state.lastBotChatAt = now + Math.floor(Math.random() * 4500);
+      const speaker = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+      const line = BOT_CHATTER[Math.floor(Math.random() * BOT_CHATTER.length)];
+      handleComment(speaker, line, { isBot: true });
+    }
+
+    // 3. Simulated gifts every 45–60s from real GIFT_CATALOG
+    if (now - state.lastBotGiftAt >= state.nextBotGiftDelayMs) {
+      state.lastBotGiftAt = now;
+      state.nextBotGiftDelayMs = 45000 + Math.floor(Math.random() * 15000);
+
+      const gifter = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+      const gift = GIFT_CATALOG[Math.floor(Math.random() * GIFT_CATALOG.length)];
+      const repeatCount = gift.diamondCount <= 2 ? (1 + Math.floor(Math.random() * 3)) : 1;
+      handleGift({
+        username: gifter,
+        giftName: gift.name,
+        diamondCount: gift.diamondCount,
+        repeatCount,
+        giftId: gift.name
+      });
+    }
+  }
+
+  /* =========================================================================
+   * 13. MAIN SIMULATION TICK (100ms)
+   * ========================================================================= */
+
+  let lastTickAt = Date.now();
+  let tickTimerId = null;
+
+  function tick(nowOverride) {
+    const now = typeof nowOverride === 'number' ? nowOverride : Date.now();
+    if (state.caughtFlash && now >= state.caughtFlash.until) state.caughtFlash = null;
+    const dt = clamp(now - lastTickAt, 0, 2000);
+    lastTickAt = now;
+
+    if (!state.started || state.paused) return;
+
+    if (state.phase === 'playing') {
+      // Check fisherman temporary mood expiry
+      if (state.fishermanMoodUntil > 0 && now >= state.fishermanMoodUntil) {
+        const anyBiting = state.rods.some((r) => r.status === 'biting');
+        state.fishermanMood = anyBiting ? 'reeling' : 'waiting';
+        state.fishermanMoodUntil = 0;
+      }
+
+      // Evaluate rods (iterate over shallow copy in case escape/catch mutates array)
+      const snapshot = state.rods.slice();
+      for (let i = 0; i < snapshot.length; i++) {
+        const rod = snapshot[i];
+        if (!state.rods.includes(rod)) continue;
+
+        if (rod.status === 'waiting' && now >= rod.biteScheduledAt) {
+          triggerBite(rod, now);
+        } else if (rod.status === 'biting') {
+          if (rod.isBot && rod.botJerkAt > 0 && now >= rod.botJerkAt) {
+            jerkRod(rod.username, { now });
+          } else if (now > rod.biteDeadline) {
+            escapeFish(rod);
+          }
+        }
+      }
+
+      tickDemoBots(now);
+
+      // MC nói liên tục cả khi rảnh: 20s không có câu thoại nào thì nói 1 câu.
+      // BẢN BÁN HÀNG: câu bán hàng cũng chỉ đọc ở đây (khoảng trống), xen kẽ
+      // với câu game — event game luôn ưu tiên vì TTS.speak() của game sẽ
+      // ngắt câu bán hàng đang đọc dở.
+      if (TTS.isEnabled() && now - TTS.getLastSpeakAt() >= IDLE_VOICE_MS) {
+        const line = pickIdleLine(now);
+        if (line) TTS.speak(line);
+      }
