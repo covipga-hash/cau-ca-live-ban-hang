@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b3d4d">
+  <title>Câu Cá Live — TikTok Live Fishing Game</title>
+  <meta name="description" content="Game Câu Cá Live tương tác tự động cho TikTok Live (1080x1920) — thả tim hoặc bình luận câu để quăng cần và giật cá.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='52' font-size='52'%3E%F0%9F%8E%A3%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+  <div class="viewport-fit" id="viewportFit">
+    <main class="stage" id="stage" aria-label="Sân khấu Câu Cá Live 1080x1920">
+      <!-- 1. Compact Header -->
+      <header class="game-header">
+        <div class="brand-group">
+          <h1 class="game-title">🎣 CÂU CÁ LIVE</h1>
+          <p class="game-subtitle">Gõ <strong>“câu”</strong> quăng cần • <strong>“lên”</strong> hoặc <strong>10 Tym</strong> để lên câu • Thả tym để tăng tỉ lệ câu trúng</p>
+        </div>
+        <div class="header-meta">
+          <span class="mode-badge" id="modeBadge">DEMO TỰ ĐỘNG</span>
+          <span class="session-badge" id="sessionProgress">Phiên #1 · 0/30 cá</span>
+        </div>
+      </header>
+
+      <!-- BẢN BÁN HÀNG: banner sản phẩm đang ghim (tên + giá, từ message OEC) -->
+      <div id="productBanner" class="product-banner" role="status" aria-live="polite">
+        <span class="product-banner-label">🛒 ĐANG GHIM</span>
+        <span id="productBannerText" class="product-banner-text">Chưa ghim sản phẩm nào — ghé giỏ hàng xem đồ nhé!</span>
+      </div>
+
+      <!-- 2. Main Centerpiece: LARGE Pond Canvas (1040x900) -->
+      <section class="pond-section" aria-label="Hồ câu cá trực tiếp">
+        <div class="pond-stage">
+          <canvas id="pondCanvas" width="1040" height="900"></canvas>
+          <div id="biteAlert" class="bite-alert hidden" role="status" aria-live="polite"></div>
+          <div id="toastArea" class="toast-area" role="status" aria-live="polite"></div>
+          <div id="giftBanner" class="gift-banner hidden" role="status" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- 3. Stats Row + Biggest Fish Bar -->
+      <section class="stats-and-biggest" aria-label="Thống kê phiên câu và cá khủng nhất">
+        <div id="sessionStats" class="stats-row">
+          <div class="stat-pill">
+            <span class="stat-icon" aria-hidden="true">🎣</span>
+            <span class="stat-label">Cần đang câu</span>
+            <strong id="statRods">0/10</strong>
+          </div>
+          <div class="stat-pill stat-pill-caught">
+            <span class="stat-icon" aria-hidden="true">🐟</span>
+            <span class="stat-label">Cá đã câu</span>
+            <strong id="statCaught">0/30</strong>
+          </div>
+          <div class="stat-pill stat-pill-escaped">
+            <span class="stat-icon" aria-hidden="true">💨</span>
+            <span class="stat-label">Cá chạy mất</span>
+            <strong id="statEscaped">0</strong>
+          </div>
+        </div>
+
+        <div id="biggestFishBoard" class="biggest-fish-board" aria-label="Cá khủng nhất phiên">
+          <span class="biggest-fish-label">🐟 Cá khủng nhất phiên</span>
+          <span id="biggestFishContent" class="biggest-fish-value waiting">Đang chờ cao thủ câu con cá đầu tiên…</span>
+        </div>
+      </section>
+
+      <!-- 4. Top 3 (3 equal cards, clear left-to-right #1 -> #2 -> #3 order) -->
+      <section class="top3-section" aria-label="Top 3 cần thủ dẫn đầu">
+        <div class="lb-section-header">
+          <span class="lb-title">🏆 TOP 3 CẦN THỦ DẪN ĐẦU</span>
+          <span class="lb-note">Xếp hạng từ trái sang phải: #1 → #2 → #3 · Điểm ảo từ cá</span>
+        </div>
+        <div id="top3Board" class="top3-grid"></div>
+      </section>
+
+      <!-- Banner quà tặng: liệt kê mức quà + ưu đãi (nổi bật trên màn hình) -->
+      <footer id="giftSuggestionBox" class="gift-suggestion-box gift-banner-strip" aria-label="Gợi ý tặng quà">
+        <span class="gift-suggest-title">🎁 TẶNG QUÀ NHẬN ƯU ĐÃI:</span>
+        <div class="gift-suggest-row">
+          <div class="gift-chip chip-support">
+            <span class="chip-tier">1💎–4💎 Ủng hộ</span>
+            <span class="chip-desc">— Ủng hộ chủ thớt</span>
+          </div>
+          <div class="gift-chip chip-bait">
+            <span class="chip-tier">5💎–9💎 Mồi ngon</span>
+            <span class="chip-desc">— Dễ cá to</span>
+          </div>
+          <div class="gift-chip chip-gold">
+            <span class="chip-tier">10💎+ Cần vàng</span>
+            <span class="chip-desc">— Chắc cá hiếm</span>
+          </div>
+        </div>
+      </footer>
+
+      <!-- 5. Balanced 2-Column Bottom Section: Comment/Gift Banner (Left) + Top 4-8 (Right) -->
+      <section class="bottom-columns" aria-label="Bình luận mới nhất và Bảng xếp hạng 4 đến 8">
+        <!-- Left Column: Single Comment + Top Gifters Banner (#giftBoard) -->
+        <div id="giftBoard" class="gift-comment-banner" aria-label="Top tặng quà và bình luận mới nhất">
+          <div class="gift-top-row" id="giftTopRow">
+            <span class="gift-top-label">🎁 Top tặng quà</span>
+            <div id="giftTopList" class="gift-top-list">
+              <span class="gift-empty">Chưa có quà tặng</span>
+            </div>
+          </div>
+          <div class="comment-block">
+            <div class="comment-block-header">💬 BÌNH LUẬN MỚI NHẤT</div>
+            <ul id="commentList" class="comment-list">
+              <li class="comment-row comment-waiting">Đang chờ bình luận…</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Right Column: Top 4-8 Leaderboard -->
+        <div class="rank4to8-card" aria-label="Bảng xếp hạng hạng 4 đến 8">
+          <div class="rank4to8-header">
+            <span class="rank4to8-title">📋 HẠNG 4 – 8</span>
+            <span class="rank4to8-sub">Đua vào Top 3</span>
+          </div>
+          <div id="top4to8Board" class="top4to8-list"></div>
+        </div>
+      </section>
+
+      <!-- 6. Single-Line Bottom Gift-Suggestion Banner (ONLY place listing gift effects) -->
+      <!-- Confetti Canvas -->
+      <canvas id="confettiCanvas" class="confetti-canvas" width="1080" height="1920"></canvas>
+
+      <!-- Pause Badge (Space shortcut) -->
+      <div id="pauseBadge" class="pause-badge hidden" role="status">
+        ⏸ ĐÃ TẠM DỪNG
+      </div>
+
+      <!-- End-of-Session Summary Overlay (10s) -->
+      <div id="summaryOverlay" class="overlay summary-overlay hidden" role="dialog" aria-label="Tổng kết phiên câu">
+        <div class="summary-card">
+          <div class="summary-kicker" id="summarySessionLabel">PHIÊN #1 HOÀN TẤT</div>
+          <h2 class="summary-heading">🏆 TỔNG KẾT PHIÊN CÂU</h2>
+          <div id="summaryHighlights" class="summary-highlights"></div>
+          <div class="summary-columns">
+            <div class="summary-col">
+              <h3>🎣 Top 3 Cần Thủ</h3>
+              <ol id="summaryTopFishers" class="summary-list"></ol>
+            </div>
+            <div class="summary-col">
+              <h3>🎁 Top 3 Tặng Quà</h3>
+              <ol id="summaryTopGifters" class="summary-list"></ol>
+            </div>
+          </div>
+          <div class="summary-biggest" id="summaryBiggestFish"></div>
+          <div class="summary-timer-bar"><span id="summaryTimerFill"></span></div>
+        </div>
+      </div>
+
+      <!-- Countdown Overlay (5s) -->
+      <div id="countdownOverlay" class="overlay countdown-overlay hidden" role="status" aria-live="assertive">
+        <div class="countdown-card">
+          <div class="countdown-label">PHIÊN CÂU MỚI SẮP BẮT ĐẦU</div>
+          <div id="countdownNumber" class="countdown-number">5</div>
+          <p id="countdownSpeech" class="countdown-speech"></p>
+        </div>
+      </div>
+
+      <!-- Start Overlay (THE ONLY BUTTON ON SCREEN) -->
+      <div id="startOverlay" class="overlay start-overlay" role="dialog" aria-label="Bắt đầu Câu Cá Live">
+        <div class="start-card">
+          <div class="start-emblem" aria-hidden="true">🎣</div>
+          <h2 class="start-title">CÂU CÁ LIVE</h2>
+          <p class="start-desc">
+            Game câu cá tự động tương tác TikTok Live.<br>
+            Khán giả thả tim hoặc bình luận <strong>“câu”</strong> để quăng cần,<br>
+            thả tim trong <strong>3 giây</strong> khi cá cắn câu để giật cá!
+          </p>
+          <p class="start-mode-hint" id="startModeHint">Chế độ Demo tự động • Nhạc nền &amp; MC giọng Việt</p>
+          <button id="startBtn" class="start-btn" type="button">▶ Bắt đầu</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Ably Pub/Sub SDK cho device (CDN) + key SUBSCRIBE-ONLY cho trang tĩnh.
+       Dùng @ably/pubsub-device 3.x: tài khoản Ably MAU pricing từ chối SDK
+       cổ điển `ably` v2 (lỗi 40168). Bundle expose global `AblyPubSub`
+       với API `AblyPubSub.createClient({ key, clientId })`.
+       ably-config.js CHỈ chứa key subscribe-only (public theo thiết kế) —
+       KHÔNG BAO GIỜ để key publish vào đây. -->
+  <script src="https://cdn.jsdelivr.net/npm/@ably/pubsub-device@3.2.0/dist/cdn/ably.min.js"></script>
+  <script src="ably-config.js"></script>
+  <script src="app.js?v=1"></script>
+</body>
+</html>
